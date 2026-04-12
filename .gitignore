@@ -9,6 +9,7 @@ __pycache__/
 .codex
 .omx/
 *.mp4
+!docs/media/*.mp4
 *.json
 runs/
 artifacts/

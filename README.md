@@ -1,5 +1,7 @@
 # flashvsr-long-video-runner
 
+[中文说明](README.zh-CN.md)
+
 A small, open-source-friendly wrapper around an **existing upstream FlashVSR checkout** for running long videos more safely.
 
 This repository **does not vendor FlashVSR weights or modify the upstream project**. Instead, it:
@@ -77,7 +79,73 @@ Resume is **index-based** because each chunk already knows its exact frame range
 
 This wrapper intentionally keeps its own Python dependencies light. GPU/runtime dependencies still come from the upstream FlashVSR environment.
 
-## Install
+## Install the upstream FlashVSR stack
+
+If you do not already have a working upstream checkout, set that up first. The steps below are summarized from the official FlashVSR repository's installation flow.
+
+### 1. Clone upstream FlashVSR
+
+```bash
+git clone https://github.com/OpenImagingLab/FlashVSR
+cd FlashVSR
+```
+
+### 2. Create the Python environment
+
+The upstream project recommends Python `3.11.13`:
+
+```bash
+conda create -n flashvsr python=3.11.13
+conda activate flashvsr
+pip install -e .
+pip install -r requirements.txt
+```
+
+### 3. Install Block-Sparse-Attention
+
+FlashVSR depends on the Block-Sparse-Attention backend. The upstream README recommends installing it in a separate clean directory:
+
+```bash
+git clone https://github.com/mit-han-lab/Block-Sparse-Attention
+cd Block-Sparse-Attention
+pip install packaging
+pip install ninja
+python setup.py install
+```
+
+Note:
+
+- the build step can use a lot of memory during compilation
+- the upstream README explicitly says compatibility and performance outside A100/A800/H200 are not guaranteed
+
+### 4. Download the original model weights
+
+From the upstream repo root:
+
+```bash
+cd examples/WanVSR
+git lfs install
+
+# v1 (original)
+git lfs clone https://huggingface.co/JunhaoZhuang/FlashVSR
+
+# or v1.1 (recommended by upstream)
+git lfs clone https://huggingface.co/JunhaoZhuang/FlashVSR-v1.1
+```
+
+Expected layout:
+
+```text
+examples/WanVSR/FlashVSR-v1.1/
+  LQ_proj_in.ckpt
+  TCDecoder.ckpt
+  Wan2.1_VAE.pth
+  diffusion_pytorch_model_streaming_dmd.safetensors
+```
+
+The wrapper in this repository only expects a valid upstream checkout plus one of these weight folders. It does not bundle either one.
+
+## Install this wrapper
 
 ```bash
 cd flashvsr-long-video-runner
@@ -129,6 +197,32 @@ flashvsr-long-video run \
   --upstream-root /path/to/FlashVSR \
   --resume
 ```
+
+## Preview
+
+The assets below were generated from the local sample `video.mp4` using this wrapper plus upstream `infer_flashvsr_v1.1_tiny_long_video.py`.
+
+- input sample: `960x720`, `4007` frames, about `133.6s`
+- preview output: first rendered chunk `chunk_00000.mp4`
+- output chunk size: `1920x1408`
+- note: upstream aligns to model-friendly dimensions, so the height is center-cropped instead of landing on a strict `1920x1440`
+
+Frame 10, prepared input on the left and FlashVSR output on the right:
+
+![Frame 10 Comparison](docs/media/frame10_compare.png)
+
+Detail crop around the logo and title area:
+
+![Frame 10 Detail Comparison](docs/media/frame10_detail_compare.png)
+
+Short comparison clip for the first chunk:
+
+[![Chunk 00000 Comparison Clip](docs/media/frame10_compare.png)](docs/media/chunk_00000_compare.mp4)
+
+Observed on this sample:
+
+- the large title strokes and distant mountain edges are visibly sharper
+- the tiny upper-left overlay text still shows ringing / artifacting
 
 ## Manifest sketch
 
