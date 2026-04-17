@@ -6,7 +6,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .planning import ChunkPlan
+from .planning import ChunkPlan, MIN_LONG_PIPELINE_RENDER_FRAMES
+from .storage import write_json_atomic
 
 
 @dataclass
@@ -24,7 +25,7 @@ class VideoMeta:
 class PlannerConfig:
     max_render_frames: int = 21
     tiny_tail_threshold: int = 8
-    tail_merge_min_render_frames: int = 13
+    tail_merge_min_render_frames: int = MIN_LONG_PIPELINE_RENDER_FRAMES
 
 
 @dataclass
@@ -122,9 +123,7 @@ def build_manifest(
 
 
 def save_manifest(manifest: Manifest, path: str | Path) -> None:
-    target = Path(path)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(json.dumps(manifest.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
+    write_json_atomic(path, manifest.to_dict(), ensure_ascii=False, indent=2)
 
 
 def _coerce_dataclass(cls: type, payload: dict[str, Any]):

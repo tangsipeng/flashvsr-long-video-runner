@@ -2,7 +2,7 @@ from pathlib import Path
 
 from flashvsr_long_video_runner.manifest import PlannerConfig, UpstreamConfig, VideoMeta, build_manifest, load_manifest, save_manifest
 from flashvsr_long_video_runner.planning import plan_chunks
-from flashvsr_long_video_runner.runner import assemble_render_frames, pending_chunk_indices
+from flashvsr_long_video_runner.runner import _ensure_upstream_render_window, assemble_render_frames, pending_chunk_indices
 
 
 class DummyImage:
@@ -23,8 +23,8 @@ def test_manifest_roundtrip_preserves_explicit_ranges(tmp_path: Path):
         fps_float=25.0,
         has_audio=True,
     )
-    planner = PlannerConfig(max_render_frames=21, tiny_tail_threshold=8, tail_merge_min_render_frames=13)
-    chunks = plan_chunks(50, max_render_frames=21, tiny_tail_threshold=8, tail_merge_min_render_frames=13)
+    planner = PlannerConfig(max_render_frames=21, tiny_tail_threshold=8, tail_merge_min_render_frames=21)
+    chunks = plan_chunks(50, max_render_frames=21, tiny_tail_threshold=8, tail_merge_min_render_frames=21)
     manifest = build_manifest(
         input_path=tmp_path / "input.mp4",
         output_path=tmp_path / "output.mp4",
@@ -41,10 +41,10 @@ def test_manifest_roundtrip_preserves_explicit_ranges(tmp_path: Path):
 
     assert loaded.chunks[-1].source_start == 42
     assert loaded.chunks[-1].source_end == 50
-    assert loaded.chunks[-1].render_start == 37
+    assert loaded.chunks[-1].render_start == 29
     assert loaded.chunks[-1].render_end == 50
-    assert loaded.chunks[-1].trim_start == 5
-    assert loaded.chunks[-1].trim_end == 13
+    assert loaded.chunks[-1].trim_start == 13
+    assert loaded.chunks[-1].trim_end == 21
     assert loaded.upstream.infer_script == "/upstream/infer.py"
 
 
@@ -63,6 +63,25 @@ def test_assemble_render_frames_applies_padding():
     frames = assemble_render_frames(chunk, actual)
     assert len(frames) == 6
     assert [frame.name for frame in frames] == ["a_copy", "a", "b", "c", "c_copy", "c_copy"]
+
+
+def test_ensure_upstream_render_window_expands_legacy_short_tail():
+    frames = [DummyImage(f"f{i}") for i in range(13)]
+    chunk = type(
+        "Chunk",
+        (),
+        {
+            "trim_start": 11,
+            "trim_end": 13,
+        },
+    )()
+    expanded, trim_start, trim_end = _ensure_upstream_render_window(chunk, frames)
+    assert len(expanded) == 21
+    assert trim_start == 19
+    assert trim_end == 21
+    assert expanded[0].name == "f0_copy"
+    assert expanded[8].name == "f0"
+    assert expanded[-1].name == "f12"
 
 
 def test_pending_chunk_indices_are_index_based(tmp_path: Path):

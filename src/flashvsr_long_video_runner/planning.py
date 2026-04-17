@@ -3,6 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
+MIN_LONG_PIPELINE_RENDER_FRAMES = 21
+
+
 @dataclass(frozen=True)
 class ChunkPlan:
     index: int
@@ -62,7 +65,7 @@ def choose_render_length(
 ) -> int:
     if source_length <= 0:
         raise ValueError("source_length must be positive")
-    target = source_length
+    target = max(source_length, MIN_LONG_PIPELINE_RENDER_FRAMES)
     if prefer_tail_merge:
         target = max(target, tail_merge_min_render_frames)
     for length in valid_lengths:
@@ -78,14 +81,22 @@ def plan_chunks(
     *,
     max_render_frames: int = 21,
     tiny_tail_threshold: int = 8,
-    tail_merge_min_render_frames: int = 13,
+    tail_merge_min_render_frames: int = MIN_LONG_PIPELINE_RENDER_FRAMES,
 ) -> list[ChunkPlan]:
     if total_frames <= 0:
         raise ValueError("total_frames must be positive")
+    if max_render_frames < MIN_LONG_PIPELINE_RENDER_FRAMES:
+        raise ValueError(
+            f"max_render_frames must be at least {MIN_LONG_PIPELINE_RENDER_FRAMES} for the upstream FlashVSR long-video pipeline"
+        )
     valid_lengths = valid_render_lengths(max_render_frames)
     if tail_merge_min_render_frames not in valid_lengths:
         raise ValueError(
             f"tail_merge_min_render_frames={tail_merge_min_render_frames} must be one of {valid_lengths}"
+        )
+    if tail_merge_min_render_frames < MIN_LONG_PIPELINE_RENDER_FRAMES:
+        raise ValueError(
+            f"tail_merge_min_render_frames must be at least {MIN_LONG_PIPELINE_RENDER_FRAMES} for the upstream FlashVSR long-video pipeline"
         )
 
     chunks: list[ChunkPlan] = []

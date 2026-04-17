@@ -4,19 +4,14 @@ import argparse
 import json
 from pathlib import Path
 
-from .manifest import PlannerConfig, UpstreamConfig, build_manifest, save_manifest
-from .media import probe_video
-from .planning import plan_chunks
+from .manifest import PlannerConfig
 from .runner import run_manifest
-from .upstream import resolve_infer_script, resolve_weights_dir
+from .service import ServiceConfig, serve
+from .workflow import default_manifest_path, plan_video_job
 
 
 def _default_work_dir(input_path: Path, scale: float) -> Path:
     return (Path.cwd() / "runs" / f"{input_path.stem}_x{scale:g}").resolve()
-
-
-def _default_manifest_path(work_dir: Path) -> Path:
-    return (work_dir / "manifest.json").resolve()
 
 
 def _planner_from_args(args) -> PlannerConfig:
@@ -31,37 +26,19 @@ def cmd_plan(args) -> int:
     input_path = Path(args.input).expanduser().resolve()
     output_path = Path(args.output).expanduser().resolve()
     work_dir = Path(args.work_dir).expanduser().resolve() if args.work_dir else _default_work_dir(input_path, args.scale)
-    manifest_path = Path(args.manifest).expanduser().resolve() if args.manifest else _default_manifest_path(work_dir)
+    manifest_path = Path(args.manifest).expanduser().resolve() if args.manifest else default_manifest_path(work_dir)
 
-    video = probe_video(input_path)
-    planner = _planner_from_args(args)
-    chunks = plan_chunks(
-        video.total_frames,
-        max_render_frames=planner.max_render_frames,
-        tiny_tail_threshold=planner.tiny_tail_threshold,
-        tail_merge_min_render_frames=planner.tail_merge_min_render_frames,
-    )
-
-    infer_script = None
-    weights_dir = None
-    if args.infer_script or args.upstream_root:
-        infer_script = resolve_infer_script(args.upstream_root, args.infer_script)
-        weights_dir = resolve_weights_dir(infer_script, args.weights_dir)
-
-    manifest = build_manifest(
+    manifest = plan_video_job(
         input_path=input_path,
         output_path=output_path,
         work_dir=work_dir,
         scale=args.scale,
-        video=video,
-        planner=planner,
-        chunks=chunks,
-        upstream=UpstreamConfig(
-            infer_script=str(infer_script) if infer_script else None,
-            weights_dir=str(weights_dir) if weights_dir else None,
-        ),
+        planner=_planner_from_args(args),
+        manifest_path=manifest_path,
+        upstream_root=args.upstream_root,
+        infer_script=args.infer_script,
+        weights_dir=args.weights_dir,
     )
-    save_manifest(manifest, manifest_path)
     print(json.dumps(manifest.to_dict(), ensure_ascii=False, indent=2))
     return 0
 
@@ -77,6 +54,25 @@ def cmd_run(args) -> int:
     return 0
 
 
+def cmd_serve(args) -> int:
+    if not args.upstream_root and not args.infer_script:
+        raise SystemExit("serve requires --upstream-root or --infer-script")
+    serve(
+        ServiceConfig(
+            host=args.host,
+            port=args.port,
+            state_dir=args.state_dir,
+            scale=args.scale,
+            max_queued_jobs=args.max_queued_jobs,
+            planner=_planner_from_args(args),
+            upstream_root=args.upstream_root,
+            infer_script=args.infer_script,
+            weights_dir=args.weights_dir,
+        )
+    )
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Safe long-video runner around upstream FlashVSR")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -87,12 +83,17 @@ def build_parser() -> argparse.ArgumentParser:
     plan.add_argument("--scale", type=float, default=2.0, help="Upscale factor passed to upstream FlashVSR")
     plan.add_argument("--work-dir", help="Working directory for chunk outputs and manifest")
     plan.add_argument("--manifest", help="Manifest output path (default: <work-dir>/manifest.json)")
-    plan.add_argument("--max-render-frames", type=int, default=21, help="Maximum upstream-friendly render window (5, 13, 21, ...)")
+    plan.add_argument(
+        "--max-render-frames",
+        type=int,
+        default=21,
+        help="Maximum long-pipeline render window (21, 29, 37, ...)",
+    )
     plan.add_argument("--tiny-tail-threshold", type=int, default=8, help="Tail source length that triggers larger tail render windows")
     plan.add_argument(
         "--tail-merge-min-render-frames",
         type=int,
-        default=13,
+        default=21,
         help="When tail merging is triggered, use at least this render window length",
     )
     plan.add_argument("--upstream-root", help="Path to an upstream FlashVSR checkout")
@@ -107,6 +108,40 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--infer-script", help="Path to upstream infer_flashvsr_v1.1_tiny_long_video.py")
     run.add_argument("--weights-dir", help="Path to upstream FlashVSR-v1.1 weights directory")
     run.set_defaults(func=cmd_run)
+
+    serve_parser = subparsers.add_parser("serve", help="Run an async HTTP service for queued FlashVSR jobs")
+    serve_parser.add_argument("--host", default="0.0.0.0", help="Bind host for the HTTP service")
+    serve_parser.add_argument("--port", type=int, default=8000, help="Bind port for the HTTP service")
+    serve_parser.add_argument("--state-dir", default="service_state", help="Directory for uploaded videos and job state")
+    serve_parser.add_argument("--scale", type=float, default=2.0, help="Upscale factor applied to submitted videos")
+    serve_parser.add_argument(
+        "--max-queued-jobs",
+        type=int,
+        default=0,
+        help="Maximum number of queued jobs waiting behind the active worker (0 means unlimited)",
+    )
+    serve_parser.add_argument(
+        "--max-render-frames",
+        type=int,
+        default=21,
+        help="Maximum long-pipeline render window (21, 29, 37, ...)",
+    )
+    serve_parser.add_argument(
+        "--tiny-tail-threshold",
+        type=int,
+        default=8,
+        help="Tail source length that triggers larger tail render windows",
+    )
+    serve_parser.add_argument(
+        "--tail-merge-min-render-frames",
+        type=int,
+        default=21,
+        help="When tail merging is triggered, use at least this render window length",
+    )
+    serve_parser.add_argument("--upstream-root", help="Path to an upstream FlashVSR checkout")
+    serve_parser.add_argument("--infer-script", help="Path to upstream infer_flashvsr_v1.1_tiny_long_video.py")
+    serve_parser.add_argument("--weights-dir", help="Path to upstream FlashVSR-v1.1 weights directory")
+    serve_parser.set_defaults(func=cmd_serve)
 
     return parser
 
